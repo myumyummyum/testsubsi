@@ -30,6 +30,8 @@ public class TrackpadContext implements TouchContext {
     private double velocityY = 0.0;
     private long lastMoveTime;
     private boolean isScrollTransitioning = false;
+    private int scrollMomentumDirection = 0;
+    private int lastScrollDirection = 0;
 
     private final NvConnection conn;
     private final int actionIndex;
@@ -51,6 +53,7 @@ public class TrackpadContext implements TouchContext {
     private static final int MOMENTUM_FRAME_INTERVAL_MS = 10;
     private static final int FLICK_VELOCITY_DECAY_TIMEOUT_MS = 50;
     private static final int SCROLL_TRANSITION_TIMEOUT_MS = 200;
+    private static final double SCROLL_MOMENTUM_DEADZONE = 0.5;
 
     public TrackpadContext(NvConnection conn, int actionIndex) {
         this.conn = conn;
@@ -117,16 +120,33 @@ public class TrackpadContext implements TouchContext {
 
             double frameVelocityX = velocityX * MOMENTUM_FRAME_INTERVAL_MS;
             double frameVelocityY = velocityY * MOMENTUM_FRAME_INTERVAL_MS;
+            double scrollDeltaX = -frameVelocityX * SCROLL_SPEED_FACTOR_X;
+            double scrollDeltaY = frameVelocityY * SCROLL_SPEED_FACTOR_Y;
+
+            if (scrollMomentumDirection != 0 && scrollDeltaY != 0.0) {
+                int deltaDirection = scrollDeltaY > 0 ? 1 : -1;
+                if (deltaDirection != scrollMomentumDirection) {
+                    if (Math.abs(scrollDeltaY) > SCROLL_MOMENTUM_DEADZONE) {
+                        isFlicking = false;
+                        return;
+                    }
+                    scrollDeltaY = 0.0;
+                }
+            }
 
             if (Math.abs(frameVelocityX) > Math.abs(frameVelocityY)) {
-                conn.sendMouseHighResHScroll((short)(-frameVelocityX * SCROLL_SPEED_FACTOR_X));
+                conn.sendMouseHighResHScroll((short) scrollDeltaX);
                 if (Math.abs(frameVelocityY) * 1.05 > Math.abs(frameVelocityX)) {
-                    conn.sendMouseHighResScroll((short)(frameVelocityY * SCROLL_SPEED_FACTOR_Y));
+                    if (scrollDeltaY != 0.0) {
+                        conn.sendMouseHighResScroll((short) scrollDeltaY);
+                    }
                 }
             } else {
-                conn.sendMouseHighResScroll((short)(frameVelocityY * SCROLL_SPEED_FACTOR_Y));
+                if (scrollDeltaY != 0.0) {
+                    conn.sendMouseHighResScroll((short) scrollDeltaY);
+                }
                 if (Math.abs(frameVelocityX) * 1.05 >= Math.abs(frameVelocityY)) {
-                    conn.sendMouseHighResHScroll((short)(-frameVelocityX * SCROLL_SPEED_FACTOR_X));
+                    conn.sendMouseHighResHScroll((short) scrollDeltaX);
                 }
             }
 
@@ -203,6 +223,8 @@ public class TrackpadContext implements TouchContext {
             velocityX = 0;
             velocityY = 0;
             lastMoveTime = eventTime;
+            scrollMomentumDirection = 0;
+            lastScrollDirection = 0;
             if (isClickPending) {
                 isClickPending = false;
                 isDblClickPending = true;
@@ -290,6 +312,13 @@ public class TrackpadContext implements TouchContext {
             if (speed > FLICK_THRESHOLD) {
                 isFlicking = true;
                 if (confirmedScroll) {
+                    if (lastScrollDirection != 0) {
+                        scrollMomentumDirection = lastScrollDirection;
+                    } else {
+                        scrollMomentumDirection = velocityY != 0.0
+                                ? (int) Math.signum(velocityY)
+                                : (int) Math.signum(pendingDeltaY);
+                    }
                     handler.post(scrollMomentumRunnable);
                 } else {
                     // A 1-finger move can flick. A >1 finger move that wasn't a scroll shouldn't cause a mouse move flick.
@@ -398,6 +427,9 @@ public class TrackpadContext implements TouchContext {
                                 if (absDeltaX * 1.05 >= absDeltaY) {
                                     conn.sendMouseHighResHScroll((short)(-sendDeltaX * SCROLL_SPEED_FACTOR_X));
                                 }
+                            }
+                            if (sendDeltaY != 0) {
+                                lastScrollDirection = sendDeltaY > 0 ? 1 : -1;
                             }
                         }
                     }
